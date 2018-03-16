@@ -41,6 +41,7 @@ public class State implements Serializable{
                 sb.append(String.format("%1$1s: %2$s; ", v.getName(), v.getValue()));
             }
         }
+        sb.append("isStart: " + _isStart);
         return sb.toString().hashCode();
     }
 
@@ -52,6 +53,10 @@ public class State implements Serializable{
     @Override
     public boolean equals(Object obj) {
         State other = (State)obj;
-        return this._stateValue.equals(other._stateValue);
+        return this._stateValue.equals(other._stateValue) && this._isStart == other._isStart;
+    }
+
+    public void setIsStart(boolean isStart) {
+        _isStart = isStart;
     }
 }

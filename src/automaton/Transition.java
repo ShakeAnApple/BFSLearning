@@ -32,4 +32,23 @@ public class Transition implements Serializable{
     public int getRepeatCount(){
         return _repeatCount;
     }
+
+    @Override
+    public String toString() {
+        return String.format("From: %1$s To: %2$s By: %3$s RC: %4$s", _from, _to, _symbol, _repeatCount);
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        Transition other = (Transition)obj;
+        return this._from.equals(other._from) &&
+                this._to.equals(other._to) &&
+                this._symbol.equals(other._symbol) &&
+                this._repeatCount == other._repeatCount;
+    }
+
+    @Override
+    public int hashCode() {
+        return this.toString().hashCode();
+    }
 }

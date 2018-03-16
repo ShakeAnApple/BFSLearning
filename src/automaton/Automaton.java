@@ -62,11 +62,11 @@ public class Automaton {
         for(Transition tr : list){
             if (!_transitions.containsKey(tr.getFrom())){
                 _transitions.put(tr.getFrom(), new ArrayList<>());
-            } else{
-                _transitions.get(tr.getFrom()).add(tr);
             }
-            _states.add(tr.getFrom());
-            _states.add(tr.getTo());
+            _transitions.get(tr.getFrom()).add(tr);
+
+            addState(tr.getFrom());
+            addState(tr.getTo());
         }
     }
 
@@ -74,8 +74,14 @@ public class Automaton {
         if (_transitions.get(tr.getFrom()) == null){
             _transitions.put(tr.getFrom(), new ArrayList<>());
         }
+        addState(tr.getFrom());
 
         _transitions.get(tr.getFrom()).add(tr);
+
+//        if (!_transitions.get(tr.getFrom()).contains(tr)){
+//
+//        }
+        addState(tr.getTo());
     }
 
     public List<Transition> getTransitionsByFrom(State from){
@@ -93,9 +99,14 @@ public class Automaton {
         return _states;
     }
 
-    @Override
-    public String toString() {
-        return super.toString();
+    public Map<State, String> getStatesNames(){
+        Map<State, String> statesNames = new HashMap<>();
+        List<State> statesArr = new ArrayList<>(_states);
+        for (int i = 0; i < _states.size(); i++) {
+            String stateName = "s" + i;
+            statesNames.put(statesArr.get(i), stateName);
+        }
+        return statesNames;
     }
 
     public void getNusmvRepresentation() throws Exception {
@@ -170,7 +181,6 @@ public class Automaton {
 
             writer.append("TRUE: state;\n");
             writer.append("esac;\n");
-            int counter = 0;
             writer.append("DEFINE\n");
             for (VariableInfo var : _outputVariableInfos) {
                 writer.append(String.format("%1$s := ", var.getName()));
@@ -212,7 +222,7 @@ public class Automaton {
                             if (!isIntervalValue) {
                                 writer.append(String.format("%1$s;", var.getPossibleValues().get(i)));
                             } else{
-                                writer.append(String.format("%1$s", ((IntervalValueHandler)var.getPossibleValues().get(i)).getCurrentIntervalNum()));
+                                writer.append(String.format("%1$s;", ((IntervalValueHandler)var.getPossibleValues().get(i)).getCurrentIntervalNum()));
                             }
 
                             break;

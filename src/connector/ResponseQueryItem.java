@@ -35,12 +35,16 @@ public class ResponseQueryItem{
         return _startState;
     }
 
+    public void setStartState(State startState) {
+        _startState = startState;
+    }
+
     public State getEndState(){
         return _endState;
     }
 
-    public void changeEndState(State newState){
-        _endState = newState;
+    public void setEndState(State endState){
+        _endState = endState;
     }
 
     public SingleRequest[] getSequence(){

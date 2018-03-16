@@ -4,9 +4,9 @@ import automaton.*;
 import connector.IConnector;
 import connector.RequestQueryItem;
 import connector.ResponseQueryItem;
-import utils.Tuple;
 import utils.Utils;
 import values.IntervalValueHandler;
+import values.ValueHandler;
 
 import java.util.*;
 import java.util.stream.Collectors;
@@ -64,6 +64,7 @@ public class LearningService {
 
     private void init(){
         State startState = _connector.getDefault(_outputAlphabet.get(0).copyStructure());
+        _hypothesis.addState(startState);
 
         _connector.resetSystem(startState);
 
@@ -108,9 +109,14 @@ public class LearningService {
                 _outputAlphabet.get(0).copyStructure());
 
         long elapsedQueries = System.currentTimeMillis() - startQueries;
-
         System.out.print(elapsedQueries);
         System.out.println();
+
+        for(ResponseQueryItem r: responseQueryItems){
+            if (_hypothesis.getStartState() != null && r.getEndState().getStateValue().equals(_hypothesis.getStartState().getStateValue())){
+                r.getEndState().setIsStart(true);
+            }
+        }
 
         // let's decide that loops can be found in cases where variable is of type Interval and it needs time to pass it's interval
         // in this case we need to process the same queue several times to decide on whether it is really self loop or it is moving
@@ -120,50 +126,228 @@ public class LearningService {
                 .filter(item -> item.getStartState().equals(item.getEndState()))
                 .collect(Collectors.toList());
 
+        List<ResponseQueryItem> newStateQueries = responseQueryItems
+                .stream()
+                .filter(item -> !item.getStartState().equals(item.getEndState()))
+                .collect(Collectors.toList());
+
         System.out.print("Processing loops: ");
         long startLoops = System.currentTimeMillis();
         if (loopedQueries.size() > 0){
             processLoops(loopedQueries);
         }
-
         long elapsedLoops = System.currentTimeMillis() - startLoops;
         System.out.print(elapsedLoops);
         System.out.println();
 
-        for (ResponseQueryItem r : responseQueryItems){
-            _processedStates.put(r.getStartState(),
-                    Stream.of(
-                            r.getSequence())
-                            .limit(r.getSequence().length - 1)
-                            .collect(Collectors.toList())
-                            .toArray(new SingleRequest[r.getSequence().length - 1]
-                            )
-            );
+        System.out.print("Processing megastates: ");
+        long startMegastates = System.currentTimeMillis();
+        if (newStateQueries.size() > 0){
+            checkTransitions(newStateQueries);
         }
 
-        for (ResponseQueryItem resp: responseQueryItems){
-            SingleRequest lastRequest = resp.getSequence()[resp.getSequence().length - 1];
+        responseQueryItems.removeAll(newStateQueries);
 
-            if (_hypothesis.getTransitionsByFrom(resp.getStartState()) != null && _hypothesis.getTransitionsByFrom(resp.getStartState()).size() > 31){
-                String s = "wtf";
-            }
+        long elapsedMegastates = System.currentTimeMillis() - startMegastates;
+        System.out.print(elapsedMegastates);
+        System.out.println();
 
-            Transition tr = new Transition(
-                    resp.getStartState(),
-                    resp.getEndState(),
-                    lastRequest.getSymbol(),
-                    lastRequest.getRepeatCount());
-            _hypothesis.addTransition(tr);
-
-            if (!_processedStates.containsKey(resp.getEndState()) && lastRequest.getRepeatCount() < Integer.MAX_VALUE){
-                if (_hypothesis.getTransitionsByFrom(resp.getEndState()) != null && _hypothesis.getTransitionsByFrom(resp.getEndState()).size() > 30){
-                    String s = "wtf";
-                }
-                _nextStates.put(resp.getEndState(), resp.getSequence());
-            }
-        }
+        addToTransitions(responseQueryItems, true);
 
         System.out.println("Total: " + (System.currentTimeMillis() - startAll));
+    }
+
+    private void checkTransitions(List<ResponseQueryItem> newStateQueries) {
+        // check if continious var changing
+        List<ResponseQueryItem> continiousVarChangingStates = new ArrayList<>();
+
+        for (ResponseQueryItem resp : newStateQueries){
+            List<VariableValue> intervalsFromStartState = resp
+                    .getStartState()
+                    .getStateValue()
+                    .getSymbol()
+                    .getVariablesValues()
+                    .stream()
+                    .filter(v -> v.getValue() instanceof IntervalValueHandler)
+                    .collect(Collectors.toList());
+
+            List<VariableValue> intervalsFromEndState = resp
+                    .getEndState()
+                    .getStateValue()
+                    .getSymbol()
+                    .getVariablesValues()
+                    .stream()
+                    .filter(v -> v.getValue() instanceof IntervalValueHandler)
+                    .collect(Collectors.toList());
+
+            boolean changeInsideIntervalDetected = true;
+            for(VariableValue startContValue: intervalsFromStartState){
+                VariableValue endContValue = intervalsFromEndState
+                        .stream()
+                        .filter(v -> v.getName().equals(startContValue.getName()))
+                        .findFirst().get();
+
+                changeInsideIntervalDetected = changeInsideIntervalDetected &&
+                        startContValue.getValue().equals(endContValue.getValue()) &&
+                        !((IntervalValueHandler) startContValue.getValue()).getConcreteValue().equals(((IntervalValueHandler) endContValue.getValue()).getConcreteValue());
+            }
+
+            if (changeInsideIntervalDetected){
+                continiousVarChangingStates.add(resp);
+            }
+        }
+
+        // TODO refactor
+        if (continiousVarChangingStates.size() == 0){
+            addToTransitions(newStateQueries, true);
+            return;
+        } else{
+            List<ResponseQueryItem> stableStates = newStateQueries.stream().filter(r -> !continiousVarChangingStates.contains(r)).collect(Collectors.toList());
+            addToTransitions(stableStates, true);
+        }
+
+        Map<State, List<ResponseQueryItem>> lastRequestsByStartState = new HashMap<>();
+        for(ResponseQueryItem r : continiousVarChangingStates){
+            if (!lastRequestsByStartState.containsKey(r.getStartState())){
+                lastRequestsByStartState.put(r.getStartState(), new ArrayList<>());
+            }
+            lastRequestsByStartState.get(r.getStartState()).add(r);
+        }
+
+        for(State key: lastRequestsByStartState.keySet()){
+            processState(key, lastRequestsByStartState.get(key));
+        }
+    }
+
+    private void processState(State startState, List<ResponseQueryItem> responseQueryItems) {
+        // discover vars that change it
+        List<Symbol> lastRequestSymbols = responseQueryItems
+                .stream()
+                .map(r -> r.getSequence()[r.getSequence().length - 1].getSymbol())
+                .collect(Collectors.toList());
+
+        // TODO temp adhoc, replace with dnf minimizing
+        Map<String, ValueHandler> valuesByNames = new HashMap<>();
+        for(VariableValue vv: lastRequestSymbols.get(0).getVariablesValues()) {
+            valuesByNames.put(vv.getName(), null);
+        }
+        for(Symbol s: lastRequestSymbols){
+            for(VariableValue vv: s.getVariablesValues()){
+                if (!valuesByNames.containsKey(vv.getName())) {
+                    continue;
+                }
+
+                ValueHandler lastValue = valuesByNames.get(vv.getName());
+                if (lastValue == null || lastValue.equals(vv.getValue())){
+                    valuesByNames.put(vv.getName(), vv.getValue());
+                } else {
+                    valuesByNames.remove(vv.getName());
+                }
+            }
+        }
+
+        // simulate transitions without it
+//        List<Symbol> transitionSymbols = _inputAlphabet
+//                .stream()
+//                .filter(s -> {
+//                    for(String varName: valuesByNames.keySet()){
+//                        if (!s.getVariableValueByName(varName).getValue().equals(valuesByNames.get(varName))){
+//                            return true;
+//                        }
+//                    }
+//                    return false;
+//                })
+//                .collect(Collectors.toList());
+//
+//
+//
+////      List<RequestQueryItem> requests = transitionSymbols.stream()
+////                .map(s -> new RequestQueryItem(startState, new SingleRequest[]{new SingleRequest(s, 0)}))
+////                .collect(Collectors.toList());
+////
+////        List<ResponseQueryItem> responses = _connector.sendQueries(requests, _outputAlphabet.get(0).copyStructure());
+//        addToTransitions(responses, false);
+
+        // simulate rest transitions till the next interval
+//        List<Symbol> restTransitionsSymbols = _inputAlphabet.stream()
+//                .filter(s -> {
+//                    boolean result = true;
+//                    for(String varName: valuesByNames.keySet()){
+//                        result = result && s.getVariableValueByName(varName).getValue().equals(valuesByNames.get(varName));
+//                    }
+//                    return result;
+//                })
+//                .collect(Collectors.toList());
+
+        List<RequestQueryItem> requestsToNextInterval = new ArrayList<>();
+        for(Symbol s: lastRequestSymbols){
+            requestsToNextInterval.add(new RequestQueryItem(startState, new SingleRequest[]{new SingleRequest(s, 0)}));
+        }
+//        for (ResponseQueryItem resp : responses){
+//            for(Symbol s: restTransitionsSymbols){
+//                requestsToNextInterval.add(new RequestQueryItem(resp.getEndState(), new SingleRequest[]{new SingleRequest(s, 0)}));
+//            }
+//        }
+
+        List<String> intervalValuesNames = _outputAlphabet.get(0)
+                .getVariablesValues()
+                .stream()
+                .filter(v -> v.getValue() instanceof IntervalValueHandler)
+                .map(v -> v.getName())
+                .collect(Collectors.toList());
+
+        List<ResponseQueryItem> responsesToNextInterval = new ArrayList<>();
+        List<ResponseQueryItem> responsesReady = new ArrayList<>();
+        boolean allTransitionsDone = false;
+        while(!allTransitionsDone) {
+            responsesToNextInterval = _connector.sendQueries(requestsToNextInterval, _outputAlphabet.get(0).copyStructure());
+
+            for(ResponseQueryItem r: responsesToNextInterval){
+                if (_hypothesis.getStartState() != null && r.getEndState().getStateValue().equals(_hypothesis.getStartState().getStateValue())){
+                    r.getEndState().setIsStart(true);
+                }
+            }
+
+            // that are changing in general but not yet
+            List<ResponseQueryItem> responsesToRepeat = responsesToNextInterval
+                    .stream()
+                    .filter(r -> {
+                        boolean notChanged = true; //needToRepeat
+                        for(String varName : intervalValuesNames){
+                            IntervalValueHandler startVal = (IntervalValueHandler) r.getStartState().getStateValue().getSymbol().getVariableValueByName(varName).getValue();
+                            IntervalValueHandler endVal = (IntervalValueHandler) r.getEndState().getStateValue().getSymbol().getVariableValueByName(varName).getValue();
+                            notChanged = notChanged &&
+                                    startVal.equals(endVal) &&
+                                    !startVal.getConcreteValue().equals(endVal.getConcreteValue());
+                        }
+                        return notChanged;
+                    })
+                    .collect(Collectors.toList());
+
+            List<ResponseQueryItem> currentReadyResponses = responsesToNextInterval
+                    .stream()
+                    .filter(r -> !responsesToRepeat.contains(r))
+                    .collect(Collectors.toList());
+
+            responsesReady.addAll(currentReadyResponses);
+
+            if (responsesToRepeat.size() == 0){
+                allTransitionsDone = true;
+                continue;
+            }
+
+            requestsToNextInterval = responsesToRepeat.stream()
+                    .map(r -> {
+                        r.getSequence()[r.getSequence().length - 1].incrementRepeatCount();
+                        return new RequestQueryItem(r.getEndState(), r.getSequence());
+                    })
+                    .collect(Collectors.toList());
+        }
+
+        for(ResponseQueryItem r: responsesReady){
+            r.setStartState(startState);
+        }
+        addToTransitions(responsesReady, true);
     }
 
     private void processLoops(List<ResponseQueryItem> loopedQueries) {
@@ -228,6 +412,12 @@ public class LearningService {
             List<ResponseQueryItem> responseQueryItems = _connector.sendQueries(requestQueryItems,
                     _outputAlphabet.get(0).copyStructure());
 
+            for(ResponseQueryItem r: responseQueryItems){
+                if (_hypothesis.getStartState() != null && r.getEndState().getStateValue().equals(_hypothesis.getStartState().getStateValue())){
+                    r.getEndState().setIsStart(true);
+                }
+            }
+
             allLoopsResolved = true;
             for (ResponseQueryItem r: responseQueryItems){
                 if (r.getStartState().equals(r.getEndState())){
@@ -260,7 +450,7 @@ public class LearningService {
 //                            .filter(q -> q.getId().equals(r.getId()))
 //                            .findAny()
 //                            .get()
-//                            .changeEndState(r.getEndState());
+//                            .setEndState(r.getEndState());
                 }
                 loopedQueries
                         .stream()
@@ -268,7 +458,7 @@ public class LearningService {
                         .filter(q -> q.getId().equals(r.getId()))
                         .findAny()
                         .get()
-                        .changeEndState(r.getEndState());
+                        .setEndState(r.getEndState());
             }
 
             //analyze history to determine whether interval value is changing
@@ -352,6 +542,34 @@ public class LearningService {
         }
 
         return false;
+    }
+
+    public void addToTransitions(List<ResponseQueryItem> responses, boolean addToNextStates){
+        for (ResponseQueryItem r : responses){
+            _processedStates.put(r.getStartState(),
+                    Stream.of(
+                            r.getSequence())
+                            .limit(r.getSequence().length - 1)
+                            .collect(Collectors.toList())
+                            .toArray(new SingleRequest[r.getSequence().length - 1]
+                            )
+            );
+        }
+
+        for (ResponseQueryItem resp: responses){
+            SingleRequest lastRequest = resp.getSequence()[resp.getSequence().length - 1];
+
+            Transition tr = new Transition(
+                    resp.getStartState(),
+                    resp.getEndState(),
+                    lastRequest.getSymbol(),
+                    lastRequest.getRepeatCount());
+            _hypothesis.addTransition(tr);
+
+            if (addToNextStates && !_processedStates.containsKey(resp.getEndState()) && lastRequest.getRepeatCount() < Integer.MAX_VALUE){
+                _nextStates.put(resp.getEndState(), resp.getSequence());
+            }
+        }
     }
 
 }

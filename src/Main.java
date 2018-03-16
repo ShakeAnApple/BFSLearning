@@ -3,6 +3,7 @@ import automaton.Symbol;
 import automaton.VariableInfo;
 import connector.IConnector;
 import connector.NxtStudioConnector;
+import graph.XmlGraphBuilder;
 import impl.LearningService;
 import values.BooleanValueHandler;
 import values.IntervalValueHandler;
@@ -14,9 +15,9 @@ import java.util.concurrent.TimeUnit;
 
 public class Main {
 
-    public static void main(String[] args) {
+    public static void main(String[] args) throws Exception {
 
-        List<BooleanValueHandler> possibleBoolValues = List.of(new BooleanValueHandler(true), new BooleanValueHandler(false));
+        List<BooleanValueHandler> possibleBoolValues = List.of(new BooleanValueHandler(false), new BooleanValueHandler(true));
 
         VariableInfo<BooleanValueHandler> inputDoor0Open = new VariableInfo("door0", 2, possibleBoolValues, BooleanValueHandler::new);
         VariableInfo<BooleanValueHandler> inputDoor1Open = new VariableInfo("door1", 3,  possibleBoolValues, BooleanValueHandler::new);
@@ -82,7 +83,6 @@ public class Main {
 //        ModelInfo modelInfo = new ModelInfo("C:\\Projects\\FCP\\active_learning\\cylinder_simulink", "Cylinder_simple");
 
 
-        Boolean isResult = false;
         Automaton hypothesis = new Automaton(inputVars, outputVars);
         // magic numbers oO
         IConnector connector = new NxtStudioConnector(64999, 64998);
@@ -91,7 +91,7 @@ public class Main {
         hypothesis.setInputVariables(inputVars);
         hypothesis.setOutputVariables(outputVars);
 
-        boolean needToLearn = true;
+        boolean needToLearn = false;
         if (needToLearn) {
             LearningService ls = new LearningService(inputAlphabet, outputAlphabet, hypothesis, connector);
             long start = System.currentTimeMillis();
@@ -102,12 +102,9 @@ public class Main {
         } else{
             hypothesis.loadTransitions("C:\\tmp\\trans2");
 
-            try {
-                hypothesis.getNusmvRepresentation();
-            }
-            catch(Exception e){
-                System.out.print(e.getMessage());
-            }
+
+            hypothesis.getNusmvRepresentation();
+            XmlGraphBuilder.saveAsDgmlGraph(hypothesis, "C:\\tmp\\g.dgml");
         }
 
 
